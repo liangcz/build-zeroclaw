@@ -1,0 +1,31 @@
+name: Build ZeroClaw for OpenWrt (aarch64-musl)
+
+on:
+  workflow_dispatch: # 允许手动触发
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout ZeroClaw source code
+        uses: actions/checkout@v4
+        with:
+          repository: 'zeroclaw-labs/zeroclaw'
+          
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+
+      - name: Install Cross for cross-compilation
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build the project
+        run: cross build --target aarch64-unknown-linux-musl --release
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zeroclaw-aarch64-musl
+          path: target/aarch64-unknown-linux-musl/release/zeroclaw
