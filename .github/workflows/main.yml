@@ -1,7 +1,7 @@
-name: Build ZeroClaw for OpenWrt (aarch64-musl)
+name: Build ZeroClaw Full (aarch64-musl)
 
 on:
-  workflow_dispatch: # 允许手动触发
+  workflow_dispatch:
 
 jobs:
   build:
@@ -13,7 +13,19 @@ jobs:
         with:
           repository: 'zeroclaw-labs/zeroclaw'
           ref: 'v0.6.8'
-          
+
+      # ⭐️ 新增：先配置 Node 环境并编译出前端静态资源
+      - name: Setup Node.js and Build Web Dashboard
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Build Web Frontend
+        run: |
+          cd web
+          npm ci
+          npm run build
+
+      # 原有的 Rust 编译步骤
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -22,11 +34,12 @@ jobs:
       - name: Install Cross for cross-compilation
         run: cargo install cross --git https://github.com/cross-rs/cross
 
+      # ⭐️ 此时进行 Rust 编译，它就会自动把上面编译好的 web 塞进二进制文件里！
       - name: Build the project
         run: cross build --target aarch64-unknown-linux-musl --release
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: zeroclaw-aarch64-musl
+          name: zeroclaw-full-aarch64-musl
           path: target/aarch64-unknown-linux-musl/release/zeroclaw
