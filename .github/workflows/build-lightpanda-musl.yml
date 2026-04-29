@@ -5,12 +5,14 @@ on:
 
 jobs:
   build-aarch64-musl:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 90
 
     env:
       SRC_DIR: browser
       ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.zig-global-cache
       ZIG_LOCAL_CACHE_DIR: ${{ github.workspace }}/browser/.zig-cache
+      LIGHTPANDA_DISABLE_TELEMETRY: true
 
     steps:
       - name: Checkout Lightpanda source
@@ -19,65 +21,88 @@ jobs:
           repository: lightpanda-io/browser
           ref: main
           path: browser
+          fetch-depth: 0
 
-      - name: Cache Zig build cache
+      - name: Cache Zig / Lightpanda build cache
         uses: actions/cache@v4
         with:
           path: |
             .zig-global-cache
             browser/.zig-cache
             browser/zig-out
-          key: lightpanda-aarch64-musl-${{ runner.os }}-${{ hashFiles('browser/build.zig', 'browser/build.zig.zon', 'browser/**.zig') }}
+            browser/.lp-cache
+          key: lightpanda-aarch64-musl-zig-${{ runner.os }}-${{ hashFiles('browser/build.zig', 'browser/build.zig.zon', 'browser/src/**') }}
           restore-keys: |
-            lightpanda-aarch64-musl-${{ runner.os }}-
+            lightpanda-aarch64-musl-zig-${{ runner.os }}-
 
-      - name: Install system dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y \
-            curl xz-utils tar git make \
-            build-essential pkg-config \
-            ca-certificates python3
+      - name: Install Lightpanda deps
+        uses: ./browser/.github/actions/install
+        with:
+          os: linux
+          arch: aarch64
+          cache-dir: ${{ github.workspace }}/.cache
 
-      - name: Install Zig
+      - name: Cache downloaded V8
+        uses: actions/cache@v4
+        with:
+          path: .cache/v8
+          key: lightpanda-v8-linux-aarch64-v0.4.2-14.0.365.4
+          restore-keys: |
+            lightpanda-v8-linux-aarch64-
+
+      - name: Verify tools
         working-directory: browser
         run: |
-          ZIG_VERSION=$(grep 'minimum_zig_version' build.zig.zon | cut -d'"' -f2)
-          echo "Using Zig $ZIG_VERSION"
+          uname -a
+          zig version
+          rustc --version
+          cargo --version
+          ls -lh v8/
+          file v8/libc_v8.a || true
 
-          curl -L -o /tmp/zig.tar.xz \
-            "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+      - name: Build native snapshot creator
+        working-directory: browser
+        run: |
+          zig build \
+            --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR" \
+            --cache-dir "$ZIG_LOCAL_CACHE_DIR" \
+            -Dprebuilt_v8_path=v8/libc_v8.a \
+            -Doptimize=ReleaseFast \
+            snapshot_creator -- src/snapshot.bin
 
-          tar -xf /tmp/zig.tar.xz -C /tmp
-          echo "/tmp/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
-
-      - name: Verify Zig
-        run: zig version
-
-      - name: Build aarch64 musl
+      - name: Build Lightpanda aarch64 musl
         working-directory: browser
         run: |
           zig build \
             --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR" \
             --cache-dir "$ZIG_LOCAL_CACHE_DIR" \
             -Dtarget=aarch64-linux-musl \
-            -Doptimize=ReleaseFast
+            -Dcpu=generic \
+            -Dsnapshot_path=../../snapshot.bin \
+            -Dprebuilt_v8_path=v8/libc_v8.a \
+            -Doptimize=ReleaseFast \
+            -Dversion=custom-aarch64-musl
 
       - name: Package binary
         working-directory: browser
         run: |
           mkdir -p ../dist
-          find zig-out -maxdepth 4 -type f -print
 
           BIN="$(find zig-out -type f -name 'lightpanda' | head -n 1)"
           if [ -z "$BIN" ]; then
             echo "ERROR: lightpanda binary not found"
+            find zig-out -maxdepth 5 -type f -print || true
             exit 1
           fi
 
           cp "$BIN" ../dist/lightpanda-aarch64-linux-musl
           chmod +x ../dist/lightpanda-aarch64-linux-musl
-          file ../dist/lightpanda-aarch64-linux-musl
+
+          echo "=== file ==="
+          file ../dist/lightpanda-aarch64-linux-musl || true
+
+          echo "=== dynamic section / interpreter ==="
+          readelf -l ../dist/lightpanda-aarch64-linux-musl | grep -i interpreter || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
