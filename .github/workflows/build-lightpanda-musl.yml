@@ -1,0 +1,86 @@
+name: Build Lightpanda aarch64 musl
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-aarch64-musl:
+    runs-on: ubuntu-24.04
+
+    env:
+      SRC_DIR: browser
+      ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.zig-global-cache
+      ZIG_LOCAL_CACHE_DIR: ${{ github.workspace }}/browser/.zig-cache
+
+    steps:
+      - name: Checkout Lightpanda source
+        uses: actions/checkout@v4
+        with:
+          repository: lightpanda-io/browser
+          ref: main
+          path: browser
+
+      - name: Cache Zig build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .zig-global-cache
+            browser/.zig-cache
+            browser/zig-out
+          key: lightpanda-aarch64-musl-${{ runner.os }}-${{ hashFiles('browser/build.zig', 'browser/build.zig.zon', 'browser/**.zig') }}
+          restore-keys: |
+            lightpanda-aarch64-musl-${{ runner.os }}-
+
+      - name: Install system dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            curl xz-utils tar git make \
+            build-essential pkg-config \
+            ca-certificates python3
+
+      - name: Install Zig
+        working-directory: browser
+        run: |
+          ZIG_VERSION=$(grep 'minimum_zig_version' build.zig.zon | cut -d'"' -f2)
+          echo "Using Zig $ZIG_VERSION"
+
+          curl -L -o /tmp/zig.tar.xz \
+            "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+
+          tar -xf /tmp/zig.tar.xz -C /tmp
+          echo "/tmp/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
+
+      - name: Verify Zig
+        run: zig version
+
+      - name: Build aarch64 musl
+        working-directory: browser
+        run: |
+          zig build \
+            --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR" \
+            --cache-dir "$ZIG_LOCAL_CACHE_DIR" \
+            -Dtarget=aarch64-linux-musl \
+            -Doptimize=ReleaseFast
+
+      - name: Package binary
+        working-directory: browser
+        run: |
+          mkdir -p ../dist
+          find zig-out -maxdepth 4 -type f -print
+
+          BIN="$(find zig-out -type f -name 'lightpanda' | head -n 1)"
+          if [ -z "$BIN" ]; then
+            echo "ERROR: lightpanda binary not found"
+            exit 1
+          fi
+
+          cp "$BIN" ../dist/lightpanda-aarch64-linux-musl
+          chmod +x ../dist/lightpanda-aarch64-linux-musl
+          file ../dist/lightpanda-aarch64-linux-musl
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lightpanda-aarch64-linux-musl
+          path: dist/lightpanda-aarch64-linux-musl
